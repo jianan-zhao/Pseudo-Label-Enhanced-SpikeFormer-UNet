@@ -60,7 +60,7 @@ def ensemble_soft_voting(prob_roots, case_dirs, output_dir,
             if os.path.isdir(full_path):
                 case_to_dir[name] = cdir
 
-    # 默认权重配置映射表: { model_flag: [WT_weight, TC_weight, ET_weight] }
+    # Default weight configuration: {model_flag: [WT_weight, TC_weight, ET_weight]}
     default_weights_dict = {
         'sr': [0.75, 0.88, 0.30],  # SegResNet
         'sw': [0.05, 0.06, 0.10],  # SwinUNETR
@@ -70,7 +70,7 @@ def ensemble_soft_voting(prob_roots, case_dirs, output_dir,
     if weights is None:
         weights = default_weights_dict
 
-    # 提取当前激活实验的权重
+    # Extract the weights for the currently active models
     active_weights = []
     for model_flag in model_flags:
         if model_flag in weights:
@@ -81,7 +81,8 @@ def ensemble_soft_voting(prob_roots, case_dirs, output_dir,
 
     active_weights = np.array(active_weights) # Shape: (Num_Models, 3)
 
-    # 分类别(WT, TC, ET)独立进行归一化，确保每个通道的权重和为 1.0
+    # Normalize weights independently for each class (WT, TC, ET) so that
+    # the weights for each channel sum to 1.0
     channel_sums = np.sum(active_weights, axis=0)
     for c in range(3):
         if channel_sums[c] > 0:
@@ -109,15 +110,15 @@ def ensemble_soft_voting(prob_roots, case_dirs, output_dir,
             logger.error(f"Skipping case {case}. No model predictions could be loaded.")
             continue
 
-        # 转换为 Numpy Tensor，维度为 (N_models, C, D, H, W)
+        # Convert to a NumPy tensor with shape (N_models, C, D, H, W)
         stacked_probs = np.stack(model_probs, axis=0)
         
-        # 扩展权重维度以实现对 (N_models, C, D, H, W) 的广播乘法
-        # active_weights 的维度需要变换为 (N_models, C, 1, 1, 1)
+        # Expand the weight dimensions for broadcasting over (N_models, C, D, H, W)
+        # active_weights is reshaped to (N_models, C, 1, 1, 1)
         w_expanded = active_weights[:, :, np.newaxis, np.newaxis, np.newaxis]
         
-        # 按通道、按权重进行加权平均
-        mean_prob = np.sum(stacked_probs * w_expanded, axis=0)  # 结果维度: [C, D, H, W]
+        # Compute the weighted average independently for each channel
+        mean_prob = np.sum(stacked_probs * w_expanded, axis=0)  # Shape: [C, D, H, W]
 
         label_np = convert_prediction_to_label_suppress_fp(mean_prob)
 
@@ -182,7 +183,7 @@ def weighted_ensemble_BraTS26GoAT_test_data(model_flags, weights=None):
         model_flags=model_flags, weights=weights
     )
         
-    # 清理所有中间文件
+    # Clean up all intermediate files
     if os.path.exists(tmp_dir):
         logger.info(
             f"Removing temporary directory: {tmp_dir}"

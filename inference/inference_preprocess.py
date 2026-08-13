@@ -74,20 +74,17 @@ def preprocess_for_inference_test(image_paths):
     }
     
     
-
-
-
 def _center_crop(img: torch.Tensor, min_size=(144, 144, 144), align_stride=16) -> tuple:
     """
-    终极版动态外接矩形裁剪 (修复 U-Net 奇数尺寸 Bug)：
-    1. 根据脑部组织动态计算 3D 边界框。
-    2. 确保尺寸不低于 min_size。
-    3. 【核心】强制将 D, H, W 尺寸向上调整为 align_stride (16) 的整数倍。
+    Final dynamic bounding-box cropping (fixes the U-Net odd-size issue):
+    1. Dynamically compute a 3D bounding box based on the brain tissue region.
+    2. Ensure the cropped dimensions are no smaller than min_size.
+    3. Core: Round D, H, and W up to the nearest multiple of align_stride (16).
     """
     C, D, H, W = img.shape
     md, mh, mw = min_size
     
-    # 1. 寻找非零脑部组织区域
+    # 1. Identify the non-zero brain tissue region
     mask = torch.any(img > 0, dim=0) if C > 1 else (img[0] > 0)
     coords = torch.nonzero(mask, as_tuple=False)
     
@@ -95,24 +92,24 @@ def _center_crop(img: torch.Tensor, min_size=(144, 144, 144), align_stride=16) -
         z_min, y_min, x_min = coords.min(dim=0)[0].tolist()
         z_max, y_max, x_max = (coords.max(dim=0)[0] + 1).tolist()
         
-        # 计算初始跨度
+        # Compute the initial extent
         brain_d = z_max - z_min
         brain_h = y_max - y_min
         brain_w = x_max - x_min
         logger.info(f"Initial brain bbox: D={brain_d}, H={brain_h}, W={brain_w}")
         
-        # 2. 满足最小尺寸限制
+        # 2. Enforce the minimum size constraint
         if brain_d < md: brain_d = md
         if brain_h < mh: brain_h = mh
         if brain_w < mw: brain_w = mw
             
-        # 3. 强制向上取整到 align_stride (16) 的整数倍
+        # 3. Round up to the nearest multiple of align_stride (16)
         brain_d = ((brain_d + align_stride - 1) // align_stride) * align_stride
         brain_h = ((brain_h + align_stride - 1) // align_stride) * align_stride
         brain_w = ((brain_w + align_stride - 1) // align_stride) * align_stride
         logger.info(f"Final brain bbox: D={brain_d}, H={brain_h}, W={brain_w}")
         
-        # 4. 根据最终跨度，以脑部几何中心为基准向外扩展
+        # 4. Expand outward from the geometric center of the brain
         z_center = (coords.min(dim=0)[0][0] + coords.max(dim=0)[0][0]) // 2
         y_center = (coords.min(dim=0)[0][1] + coords.max(dim=0)[0][1]) // 2
         x_center = (coords.min(dim=0)[0][2] + coords.max(dim=0)[0][2]) // 2
@@ -131,12 +128,12 @@ def _center_crop(img: torch.Tensor, min_size=(144, 144, 144), align_stride=16) -
         x_min = max(0, x_max - brain_w)
         
     else:
-        # 兜底方案
+        # Fallback: use a centered crop with the minimum size
         z_min = max(0, (D - md) // 2); z_max = min(D, z_min + md)
         y_min = max(0, (H - mh) // 2); y_max = min(H, y_min + mh)
         x_min = max(0, (W - mw) // 2); x_max = min(W, x_min + mw)
     
-    # 执行裁剪
+    # Perform cropping
     image = img[:, z_min:z_max, y_min:y_max, x_min:x_max]
     original_shape = (D, H, W)
     

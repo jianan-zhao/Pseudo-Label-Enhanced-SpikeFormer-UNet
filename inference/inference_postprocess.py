@@ -1,18 +1,16 @@
 import os
 os.chdir(os.path.dirname(__file__))
 import torch
-import nibabel as nib
 import numpy as np
 import cc3d
 
 
-def _check_slice_continuity_v2(mask, min_component_size=20):
+def _check_slice_continuity(mask, min_component_size=20):
     """
-    删除仅存在于单层切片中的极小3D伪影。
-    只有同时满足：
-        1. 连通域体积较小
-        2. 某个轴向仅出现1层
-    才执行删除。
+    Remove small 3D artifacts that appear in only a single slice.
+    Removal is performed only when both conditions are satisfied:
+        1. The connected component has a small volume.
+        2. The component occupies only one slice along at least one axis.
     """
     cleaned_mask = mask.copy()
     labels_out, N = cc3d.connected_components(
@@ -23,7 +21,7 @@ def _check_slice_continuity_v2(mask, min_component_size=20):
     stats = cc3d.statistics(labels_out)
     for i in range(1, N + 1):
         volume = stats["voxel_counts"][i]
-        # 大病灶直接保留
+        # Preserve large lesions
         if volume >= min_component_size:
             continue
         component = labels_out == i
@@ -44,9 +42,9 @@ def _check_slice_continuity_v2(mask, min_component_size=20):
 def postprocess_brats_ratio_adaptive(pred_mask: np.ndarray, labels=(1, 2, 3)):
     """
     Ratio-adaptive postprocessing.
-    1. WT连通域过滤
-    2. ET连通域过滤
-    3. 不做额外解剖学规则
+    1. Filter WT connected components.
+    2. Filter ET connected components.
+    3. No additional anatomical rules are applied.
     """
     if isinstance(pred_mask, torch.Tensor):
         pred_mask = pred_mask.cpu().numpy()
@@ -67,7 +65,7 @@ def postprocess_brats_ratio_adaptive(pred_mask: np.ndarray, labels=(1, 2, 3)):
         if s >= 10
     ]
 
-    # 空预测
+    # Empty prediction
     if len(wt_sizes) == 0:
         return np.zeros_like(pred_mask)
 
@@ -105,7 +103,7 @@ def postprocess_brats_ratio_adaptive(pred_mask: np.ndarray, labels=(1, 2, 3)):
         if component_size < et_thresh:
             refined_mask[et_cc == idx] = 1
 
-    refined_mask = _check_slice_continuity_v2(
+    refined_mask = _check_slice_continuity(
         refined_mask,
         min_component_size=20,
     )

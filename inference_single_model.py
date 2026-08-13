@@ -16,27 +16,21 @@ import time
 from tqdm import tqdm
 import json
 from utilities.logger import logger
-from inference.inference_helper import TemporalSlidingWindowInference, SlidingWindowInference
+from inference.inference_helper import SlidingWindowInference
 from inference.inference_preprocess import preprocess_for_inference_test
-from inference.inference_postprocess import (postprocess_brats_ratio_adaptive)
-from inference.inference_utils import (convert_prediction_to_label_suppress_fp,
-                                       check_all_folds_ckpt_exist, restore_to_original_shape)
+from inference.inference_utils import check_all_folds_ckpt_exist
 
 import multiprocessing
 from concurrent.futures import ProcessPoolExecutor
 
 def pred_single_case_soft(case_dir, prob_save_dir, model, inference_engine, device):
-    """
-    极速优化版 3D TTA 推理函数
-    解决了 torch.flip 导致的非连续内存（Non-contiguous）导致的 3D 卷积性能崩塌问题。
-    """
     case_name = os.path.basename(case_dir)
     logger.info(f"Processing case: {case_name}")
     
-    # 1. 根据数据集类型匹配对应的多模态图像路径
+    # 1. Match the corresponding multimodal image paths based on the dataset configuration
     image_paths = [os.path.join(case_dir, f"{case_name}-{mod}.nii.gz") for mod in cfg.modalities]
 
-    # 2. 载入并预处理数据
+    # 2. Load and preprocess the data
     x_batch, metadata = preprocess_for_inference_test(image_paths)
         
     x_batch = x_batch.to(device)
@@ -44,60 +38,61 @@ def pred_single_case_soft(case_dir, prob_save_dir, model, inference_engine, devi
     torch.cuda.synchronize()
     start_time = time.time()
     
-    # 3. 开始无梯度推理
+    # 3. Perform inference without gradient computation
     with torch.no_grad():
         use_tta = True
         use_amp = True
         
-        # 激活 PyTorch 自动混合精度 (AMP)，极大加速 3D 卷积运算并节省显存
+        # Enable PyTorch Automatic Mixed Precision (AMP)
         with torch.amp.autocast('cuda', enabled=use_amp):
             if not use_tta:
-                # 常规无 TTA 推理
+                 # Standard inference without TTA
                 output = inference_engine(x_batch, model)
             else:
                 logger.info(f"Applying Optimized TTA for case: {case_name}")
                 
-                # A. 运行原始输入的前向传播
+                # A. Run the forward pass on the original input
                 output = inference_engine(x_batch, model)
                 
                 tta_output = output.clone()
                 del output
                 
-                # B. 配置 TTA 翻转轴
-                # tta_mode = '3d' 代表完整的 D-H-W 三轴 8 次 TTA
-                # tta_mode = '2d' 代表仅在 H-W 面进行 4 次 TTA
+                # B. Configure TTA flip axes
+                # tta_mode = '3d' performs all D-H-W axis flip combinations (8 TTA passes)
+                # tta_mode = '2d' performs flips only on the H-W plane (4 TTA passes)
                 tta_mode = '2d'
                 
                 if tta_mode == '3d':
-                    # D=2, H=3, W=4 轴的所有翻转组合 (共 7 个变体)
+                    # All flip combinations along the D=2, H=3, and W=4 axes (7 variants)
                     flips = [(2,), (3,), (4,), (2, 3), (2, 4), (3, 4), (2, 3, 4)]
                 else:
-                    # 仅保留 H=3, W=4 轴的翻转组合 (共 3 个变体，极大提升推理速度)
+                    # Only retain flips along the H=3 and W=4 axes (3 variants)
+                    # to substantially reduce inference time
                     flips = [(3,), (4,), (3, 4)]
                 
                 logger.info(f"Running TTA with {len(flips) + 1} iterations (Mode: {tta_mode}).")
                 
                 for f_dims in flips:
-                    # 使用 torch.flip 进行翻转，并立即调用 .contiguous() 确保内存连续性
+                    # Flip the input
                     flipped_input = torch.flip(x_batch, dims=f_dims).contiguous()
                     
-                    # 进行推理
+                    # Perform inference
                     flipped_output = inference_engine(flipped_input, model)
                     
-                    # 将推理出的结果镜像还原回来，并同样进行 .contiguous()
+                    # Restore the spatial orientation of the output and ensure contiguous memory layout
                     restored_output = torch.flip(flipped_output, dims=f_dims).contiguous()
                     
-                    # 累加结果
+                    # Accumulate the predictions
                     tta_output += restored_output
                     
-                    # 显存清理：及时释放临时张量，避免内存碎片化
+                    # Release temporary tensors promptly to reduce memory fragmentation
                     del flipped_input, flipped_output, restored_output
                 
-                # 计算平均值
+                # Compute the average prediction
                 tta_output /= (1.0 + len(flips))
                 output = tta_output
                 
-        # 4. 移至 CPU 处理大张量，防止后续 NumPy 转换占用大量显存
+         # 4. Move the output to CPU for processing to avoid excessive GPU memory usage
         output_cpu = output.cpu() 
         del output
         
@@ -107,7 +102,7 @@ def pred_single_case_soft(case_dir, prob_save_dir, model, inference_engine, devi
     inference_time = end_time - start_time  # 秒
     logger.info(f"Inference successfully finished in {inference_time:.2f} seconds.")
 
-    # 5. 后处理与概率图保存 (将 Logit 通过 Sigmoid 转化为概率值)
+    # 5. Postprocessing and probability map saving (convert logits to probabilities using Sigmoid)
     output_prob = torch.sigmoid(output_cpu).squeeze(0).numpy()  # [C, D, H, W]
     
     os.makedirs(prob_save_dir, exist_ok=True)
@@ -115,11 +110,11 @@ def pred_single_case_soft(case_dir, prob_save_dir, model, inference_engine, devi
     np.save(prob_path, output_prob)
     logger.info(f"Saved probability map: {prob_path}")
     
-    # 释放CPU对象
+    # Release CPU objects
     del output_prob
     del output_cpu
 
-    # 释放GPU对象
+    # Release GPU objects
     del x_batch
 
     torch.cuda.empty_cache()   
@@ -212,16 +207,16 @@ def build_model(ckpt_path, model_flag='sf'):
 
 def fold_worker(fold, prob_base_dir, case_dirs, ckpt_dir, test_case_list, model_flag):
     """
-    独立进程运行的单 Fold 推理任务
+    Run inference for a single fold in an independent process.
     """
     print(f"--> [Process Started] Fold {fold} execution begins.")
     
     try:
-        # 每个进程内部加载属于自己的模型，防止 CUDA 上下文冲突
+        # Load the model independently within each process to avoid CUDA context conflicts
         model_ckpt = os.path.join(ckpt_dir, f"best_model_fold{fold}.pth")
         model = build_model(model_ckpt, model_flag=model_flag)
         
-        # 初始化推理引擎
+        # Initialize the inference engine
         inference_engine = SlidingWindowInference(
             patch_size=[128, 128, 128], overlap=0.125, sw_batch_size=4,
             mode="constant", num_classes=3
@@ -229,7 +224,7 @@ def fold_worker(fold, prob_base_dir, case_dirs, ckpt_dir, test_case_list, model_
         
         fold_prob_dir = os.path.join(prob_base_dir, f"fold{fold}")
         
-        # 运行推理
+        # Run inference
         metadata_dict, fold_times = run_inference_folder_soft(
             case_dirs, fold_prob_dir, model, inference_engine, cfg.device, test_case_list
         )
@@ -255,10 +250,9 @@ def soft_ensemble(prob_base_dir, case_dirs, ckpt_dir, test_case_list, model_flag
     except RuntimeError:
         pass
 
- # ==========================================================
+
     # Different parallel strategies for different models
     # SwinUNETR requires lower GPU concurrency
-    # ==========================================================
     if model_flag == 'sw':
         fold_groups = [
             [1, 2, 3],
@@ -276,9 +270,7 @@ def soft_ensemble(prob_base_dir, case_dirs, ckpt_dir, test_case_list, model_flag
             f"Model {model_flag}: running all 5 folds in parallel."
         )
 
-    # ==========================================================
     # Run fold groups sequentially
-    # ==========================================================
     for group_id, folds in enumerate(fold_groups):
 
         logger.info(
@@ -314,7 +306,7 @@ def soft_ensemble(prob_base_dir, case_dirs, ckpt_dir, test_case_list, model_flag
         )
 
     
-    # 保存 metadata 映射表
+    # save metadata mapping
     metadata_json_path = os.path.join(metadata_dir, "case_metadata.json")
     with open(metadata_json_path, "w") as f:
         json.dump(final_metadata_dict, f)
@@ -341,7 +333,7 @@ def ensemble_soft_voting(prob_root, case_dirs, output_dir, metadata_json_path=No
     
     logger.info(f"Cases for ensemble: {len(case_names)}")
 
-    # ------------ Facilitate finding the source directory of each case ------------
+    # Facilitate finding the source directory of each case
     # Build a dictionary of cases under all case_dirs:
     # case_to_dir["Case123"] = "/path/.../post-treatment"
     case_to_dir = {}

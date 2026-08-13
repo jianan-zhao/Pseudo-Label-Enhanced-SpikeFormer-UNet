@@ -22,21 +22,23 @@ def get_top_n_mean(prob_map: np.ndarray, n: int = 1000) -> float:
 
 def get_et_fg_median(prob_map: np.ndarray, threshold: float = 0.01) -> float:
     """
-    计算 ET 概率图的前景中位数 (et_fg_median)。
-    计算逻辑与统计脚本中的 compute_prob_statistics 完全保持一致。
+    Compute the foreground median probability (et_fg_median) of the ET probability map.
+    The computation is fully consistent with the `compute_prob_statistics` function
+    used in the statistical analysis script.
     
-    参数:
-        prob_map (np.ndarray): ET 类的概率图数组
-        threshold (float): 前景判定阈值，默认为 0.01
+    Args:
+        prob_map (np.ndarray): Probability map for the ET class.
+        threshold (float): Threshold for determining foreground voxels. Defaults to 0.01.
         
-    返回:
-        float: 前景区域 (prob_map > threshold) 的中位数概率，若无前景体素则返回 0.0
+    Returns:
+        float: Median probability of the foreground region (prob_map > threshold).
+            Returns 0.0 if no foreground voxels are present.
     """
-    # 提取前景掩码：对应脚本中的 channel_data > 0.01
+    # Extract the foreground mask, corresponding to channel_data > 0.01 in the statistical analysis script
     fg_mask = prob_map > threshold
     fg_pixels = prob_map[fg_mask]
 
-    # 如果存在前景体素则计算中位数，否则返回 0.0
+    # Compute the median probability if foreground voxels are present; otherwise, return 0.0
     if len(fg_pixels) > 0:
         return float(np.median(fg_pixels))
     else:
@@ -81,16 +83,17 @@ def convert_prediction_to_label_suppress_fp(mean_prob: np.ndarray,
     
     et_fg_median = get_et_fg_median(et_prob)
     et_top1000_mean = get_top_n_mean(et_prob, 1000)   
-    # 1. 计算联合置信度 (Mean)
+    # 1. Compute the joint confidence (Mean)
     confidence = 0.5 * (et_fg_median + et_top1000_mean)
 
-    # 2. 动态自适应阈值调整
-    # 只有当局部存在明确病灶 (M >= 0.30) 但整体置信度偏低 (confidence < 0.30) 时，才降阈值挽救 FN
+    # 2. Dynamic adaptive threshold adjustment
+    # Only lower the threshold to rescue FN when there is a clear lesion locally (M >= 0.30) but overall confidence is low (confidence < 0.30)
     if confidence < 0.30 and et_top1000_mean >= 0.30:
-        # 挽救区：局部有响应但整体偏弱，降低阈值最大化 Recall
+        # Rescue region: local response is present but overall confidence is weak;
+        # lower the threshold to maximize recall
         et_thr_adapted = 0.25
     else:
-        # 安全区/高置信度区：保持原始阈值，防止假阳性 FP
+        # Safe/high-confidence region: retain the original threshold to suppress false positives
         et_thr_adapted = et_thr
 
 

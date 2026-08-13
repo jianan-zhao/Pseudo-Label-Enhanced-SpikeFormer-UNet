@@ -633,9 +633,7 @@ class MS_SpikeAttention_RepConv3D_qkv_id(nn.Module):
         k = self.k_conv(x)
         v = self.v_conv(x)
         
-        # =========================================================
-        # =============== Spatial Reduction (only K,V) =============
-        # =========================================================
+        # Spatial Reduction (only K,V)
         if self.sr_ratio > 1:
             k_ = self.sr_norm_k(self.sr_k(self.sr_lif_k(k)))
             v_ = self.sr_norm_v(self.sr_v(self.sr_lif_v(v)))
@@ -647,9 +645,7 @@ class MS_SpikeAttention_RepConv3D_qkv_id(nn.Module):
             v_ = v
             N_ = N
         
-        # =========================================================
-        # =============== reshape ================================
-        # =========================================================
+        # reshape
         q = self.q_lif(q).flatten(3)
         q = q.transpose(-1, -2).reshape(T, B, N, self.num_heads, C // self.num_heads)
         q = q.permute(0, 1, 3, 2, 4).contiguous()  # [T,B,h,N,d]

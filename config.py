@@ -8,7 +8,7 @@ class Config:
         # ============================
         self.gpu_name = 'cuda:0'
         self.device = torch.device(self.gpu_name if torch.cuda.is_available() else "cpu")
-        self.seed = 3407  # Can select: 42, 3407, 2025
+        self.seed = 3407  # Can select: 42, 3407, 2026
         self.use_amp = True  # Whether to use automatic mixed precision training        
         self.use_wandb = True  # Whether to use Weights & Biases for experiment tracking
         self.offline_preprocessing = True  # Whether to perform offline preprocessing (True → preprocess and save, False → online preprocessing)
