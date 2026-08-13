@@ -1,6 +1,8 @@
 
 # SpikeFormer-UNet BraTS 2026 GoAT Inference
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21910805.svg)](https://doi.org/10.5281/zenodo.21910805)
+
 This repository contains the inference pipeline for the BraTS 2026 GoAT challenge submission. The framework performs individual model inference followed by weighted ensemble fusion to generate the final segmentation predictions.
 
 ## Requirements
@@ -16,9 +18,9 @@ This repository contains the inference pipeline for the BraTS 2026 GoAT challeng
 
 Pre-trained model weights are available on Zenodo:
 
-**Zenodo:** [Insert Zenodo Link Here]
+**Zenodo:** [Pretrained Model Weights](https://doi.org/10.5281/zenodo.21910805)
 
-Download the weights and place them in the appropriate model checkpoint directories before running inference.
+The release includes pretrained weights for SpikeFormer-UNet, SegResNet, and SwinUNETR. Download and extract `weights.tar` to the root directory of this repository before running inference.
 
 ## Input Data Structure
 
